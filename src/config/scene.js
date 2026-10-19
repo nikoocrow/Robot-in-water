@@ -181,3 +181,25 @@ export const ROBOT_LABEL = {
   text: '42261',
   fill: 0.9                     // fracción del hueco original que ocupa
 }
+
+// Calidad adaptativa (core/Quality.js). Nivel 0 = máxima. ?quality=N fija un nivel
+export const QUALITY = {
+  levels: [
+    { pixelRatio: 2, shadowMapSize: 4096 },
+    { pixelRatio: 1.75, shadowMapSize: 2048 },
+    { pixelRatio: 1.5, shadowMapSize: 2048 },
+    { pixelRatio: 1.25, shadowMapSize: 2048 },
+    { pixelRatio: 1, shadowMapSize: 2048 }
+  ],
+  slowFrameMs: 18.5,            // por debajo de ~54 fps baja un nivel
+  fastFrameMs: 11,              // por encima de ~90 fps puede volver a subir…
+  upgradeAfter: 6,              // …tras estos segundos seguidos así
+  window: 1,                    // segundos de cada medición
+  warmup: 2,                    // segundos sin medir al empezar
+  cooldown: 1.5                 // segundos sin medir tras un cambio
+}
+
+// Sombra del sol: mitad del lado del área que cubre (la isla mide unos ±8 m)
+export const SHADOW = {
+  extent: 8
+}

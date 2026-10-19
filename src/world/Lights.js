@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { vectorFromBlender } from '../utils/blender.js'
+import { QUALITY, SHADOW } from '../config/scene.js'
 
 /**
  * El sol de Blender. Los shaders calculan la luz por su cuenta
@@ -15,17 +16,26 @@ export default class Lights {
     this.sun.target.position.set(0, 0, 0)
 
     this.sun.castShadow = true
-    this.sun.shadow.mapSize.set(4096, 4096)
+    this.setShadowMapSize(QUALITY.levels[0].shadowMapSize)
     this.sun.shadow.bias = -0.0004
     this.sun.shadow.normalBias = 0.015
     const cam = this.sun.shadow.camera
-    cam.left = -9
-    cam.right = 9
-    cam.top = 9
-    cam.bottom = -9
+    cam.left = -SHADOW.extent
+    cam.right = SHADOW.extent
+    cam.top = SHADOW.extent
+    cam.bottom = -SHADOW.extent
     cam.near = 1
     cam.far = 30
 
     scene.add(this.sun, this.sun.target)
+  }
+
+  /** Cambia la resolución del shadow map (se recrea en el siguiente render) */
+  setShadowMapSize(size) {
+    const shadow = this.sun.shadow
+    if (shadow.mapSize.x === size) return
+    shadow.mapSize.set(size, size)
+    shadow.map?.dispose()
+    shadow.map = null
   }
 }

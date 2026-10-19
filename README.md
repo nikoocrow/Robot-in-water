@@ -111,6 +111,11 @@ Diferencias conocidas con Blender:
 - El cielo y el mar se dibujan después de la geometría opaca, así que el test de profundidad evita
   calcularlos en los píxeles que tapa la isla.
 - El canvas no tiene MSAA ni profundidad propios: la escena se dibuja en el render target del composer.
+- **Calidad adaptativa** (`core/Quality.js`): si el equipo no llega a ~60 fps, baja de nivel
+  (resolución en pantallas Retina de 2× hacia 1×, sombra de 4096 a 2048). Con densidad ≥ 1.75×
+  usa MSAA 2× en vez de 4×, porque los bordes ya son finos. Los niveles están en `QUALITY`.
+- **`?debug`** en la URL muestra fps, ms por frame, tiempo de GPU, nivel, resolución, draw calls y
+  triángulos, y permite forzar un nivel. `?quality=N` fija el nivel sin ajuste automático.
 - La cámara no baja de `CAMERA.minHeight`, para no quedar a ras del agua.
 - El modelo se precarga desde el HTML, en paralelo con el JS, y lleva hash en el nombre:
   Vercel lo sirve con brotli y caché inmutable, así que las visitas repetidas no lo descargan.

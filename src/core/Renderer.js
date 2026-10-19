@@ -33,6 +33,15 @@ export default class Renderer {
     this.composer.addPass(new OutputPass())
   }
 
+  /** Muestras MSAA del render target de la escena */
+  setSamples(samples) {
+    for (const target of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (target.samples === samples) continue
+      target.samples = samples
+      target.dispose() // three lo recrea con las nuevas muestras en el siguiente uso
+    }
+  }
+
   resize(width, height, pixelRatio) {
     this.instance.setPixelRatio(pixelRatio)
     this.instance.setSize(width, height)
