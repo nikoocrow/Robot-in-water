@@ -18,6 +18,8 @@ npm install
 npm run dev      # servidor de desarrollo
 npm run build    # build de producción en /dist
 npm run preview  # previsualizar el build
+
+npm run optimize:model  # recomprime assets-src/escena.glb -> src/assets/models/escena.glb
 ```
 
 **Controles:** arrastra para girar la cámara y usa la rueda para acercar. El panel inferior pausa la
@@ -48,6 +50,8 @@ robot-agua-threejs/
 ├─ vite.config.js            # Three.js en un chunk aparte
 ├─ vercel.json               # caché inmutable para /assets
 ├─ public/favicon.svg
+├─ assets-src/escena.glb     # exportación original de Blender, sin comprimir
+├─ scripts/optimize-model.mjs
 └─ src/
    ├─ main.js · Experience.js
    ├─ config/scene.js         # valores del .blend y parámetros de todo lo añadido
@@ -62,7 +66,7 @@ robot-agua-threejs/
    ├─ world/                  # Sky, Clouds, Lights, Robot, RobotLabel, RockScatter, Droplets, World
    ├─ ui/                     # Hud, Credits
    ├─ assets/
-   │  ├─ models/escena.glb    # geometría, animación, cámara y atributos que usan los shaders
+   │  ├─ models/escena.glb    # el modelo comprimido con meshopt que carga la web
    │  ├─ data/escena.json     # instancias de rocas, emisor de gotas, sol y texspace por objeto
    │  ├─ images/perfil.jpg    # foto de los créditos
    │  └─ fonts/               # subconjunto de la fuente del número del pecho
@@ -112,7 +116,10 @@ Diferencias conocidas con Blender:
   Vercel lo sirve con brotli y caché inmutable, así que las visitas repetidas no lo descargan.
 - Los shaders se compilan durante la pantalla de carga, así que los primeros frames no dan tirones.
 
-Pendiente: el `.glb` (8.3 MB, solo geometría) se puede comprimir con meshopt mediante `gltf-transform`.
+- El modelo va comprimido con `EXT_meshopt_compression` (8.3 MB → 3.6 MB) **sin cuantizar**: la
+  cuantización cambia las coordenadas locales de las mallas, de las que dependen los shaders de
+  Blender. Geometría, atributos y animación salen idénticos bit a bit; la única diferencia es que
+  `gltf-transform` omite las transformaciones de nodo que están a menos de 0.00001 de la identidad.
 
 ## Despliegue
 
@@ -121,6 +128,7 @@ El proyecto se publica en [Vercel](https://vercel.com), que detecta Vite automá
 
 ## Volver a exportar desde Blender
 
+Exporta a `assets-src/escena.glb` y ejecuta `npm run optimize:model`.
 Los shaders necesitan atributos que glTF solo exporta si su nombre empieza con `_`
 (`_paint_edge`, `_edge_width`, `_point_normal`, `_data_surface`, `_data_edge_noise`, `_self_scale`) y
 las máscaras *Bright*/*Dark* del agua en el color de vértice (R y G). Se generan con un modificador
