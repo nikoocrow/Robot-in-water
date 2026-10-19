@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>PJ-03 en la orilla · Three.js</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <canvas class="webgl" aria-label="Escena 3D del robot PJ-03 junto al agua"></canvas>
+
+    <div class="loader" role="status" aria-live="polite">
+      <div class="loader__bar"><span class="loader__fill"></span></div>
+      <p class="loader__text">Cargando escena… <span class="loader__value">0%</span></p>
+    </div>
+
+    <div class="hud" hidden>
+      <p class="hud__title">PJ-03 en la orilla</p>
+      <div class="hud__actions">
+        <button type="button" data-action="toggle-animation" aria-pressed="false">Pausar</button>
+        <button type="button" data-action="reset-camera">Toma original</button>
+      </div>
+      <p class="hud__hint">Arrastra para girar · rueda para acercar</p>
+    </div>
+
+    <div class="credits">
+      <button
+        type="button"
+        class="credits__toggle"
+        aria-expanded="false"
+        aria-controls="credits-card"
+      >
+        Credits
+      </button>
+
+      <div class="credits__card" id="credits-card" role="dialog" aria-label="Credits">
+        <div class="credits__avatar">
+          <img
+            src="./src/assets/images/perfil.jpg"
+            alt="Foto de nikocrow"
+            width="80"
+            height="80"
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+        <div class="credits__info">
+          <p class="credits__name">nikocrow</p>
+          <p class="credits__role">Design, modeling and development</p>
+          <a class="credits__link" href="https://nikocrow.dev" target="_blank" rel="noopener noreferrer">
+            nikocrow.dev <span aria-hidden="true">↗</span>
+          </a>
+          <p class="credits__made">Made with Three.js</p>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
