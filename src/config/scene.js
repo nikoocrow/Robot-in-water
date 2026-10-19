@@ -2,11 +2,6 @@
  * Valores copiados de los nodos del .blend original.
  * Todos los colores están en espacio lineal, igual que en Blender.
  */
-export const ASSETS = {
-  model: '/models/escena.glb',
-  data: '/data/escena.json'
-}
-
 // Materiales del robot: Color Ramp + Principled + grupo "Paint Edge"
 export const ROBOT_MATERIALS = {
   Blue: {

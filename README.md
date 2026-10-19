@@ -44,11 +44,10 @@ forma de la isla, intensidad del bloom, altura mínima de la cámara, texto del 
 
 ```
 robot-agua-threejs/
-├─ index.html                 # canvas, pantalla de carga, HUD y tarjeta de créditos
-├─ vite.config.js
-├─ public/
-│  ├─ models/escena.glb       # geometría, animación, cámara y atributos que usan los shaders
-│  └─ data/escena.json        # instancias de rocas, emisor de gotas, sol y texspace por objeto
+├─ index.html                 # canvas, pantalla de carga, HUD, créditos y precarga del modelo
+├─ vite.config.js            # Three.js en un chunk aparte
+├─ vercel.json               # caché inmutable para /assets
+├─ public/favicon.svg
 └─ src/
    ├─ main.js · Experience.js
    ├─ config/scene.js         # valores del .blend y parámetros de todo lo añadido
@@ -62,7 +61,11 @@ robot-agua-threejs/
    │  └─ clouds/              # nubes
    ├─ world/                  # Sky, Clouds, Lights, Robot, RobotLabel, RockScatter, Droplets, World
    ├─ ui/                     # Hud, Credits
-   ├─ assets/                 # foto de perfil y subconjunto de la fuente del pecho
+   ├─ assets/
+   │  ├─ models/escena.glb    # geometría, animación, cámara y atributos que usan los shaders
+   │  ├─ data/escena.json     # instancias de rocas, emisor de gotas, sol y texspace por objeto
+   │  ├─ images/perfil.jpg    # foto de los créditos
+   │  └─ fonts/               # subconjunto de la fuente del número del pecho
    ├─ styles/main.css
    └─ utils/
 ```
@@ -105,6 +108,9 @@ Diferencias conocidas con Blender:
   calcularlos en los píxeles que tapa la isla.
 - El canvas no tiene MSAA ni profundidad propios: la escena se dibuja en el render target del composer.
 - La cámara no baja de `CAMERA.minHeight`, para no quedar a ras del agua.
+- El modelo se precarga desde el HTML, en paralelo con el JS, y lleva hash en el nombre:
+  Vercel lo sirve con brotli y caché inmutable, así que las visitas repetidas no lo descargan.
+- Los shaders se compilan durante la pantalla de carga, así que los primeros frames no dan tirones.
 
 Pendiente: el `.glb` (8.3 MB, solo geometría) se puede comprimir con meshopt mediante `gltf-transform`.
 

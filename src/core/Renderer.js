@@ -40,6 +40,11 @@ export default class Renderer {
     this.composer?.setSize(width, height)
   }
 
+  /** Compila los shaders de la escena (en paralelo si el driver lo permite) */
+  async compile(scene, camera) {
+    await this.instance.compileAsync(scene, camera)
+  }
+
   render() {
     this.composer.render()
   }

@@ -37,11 +37,14 @@ export default class Experience {
         this.camera.fromBlenderCamera(this.world.blenderCamera, this.world.robot.getFocusPoint())
       }
 
+      // Compila todos los shaders mientras sigue la pantalla de carga: sin tirones al empezar
+      await this.renderer.compile(this.scene, this.camera.instance)
+
       this.hud.ready()
       this.renderer.instance.setAnimationLoop((time) => this.tick(time))
     } catch (error) {
       console.error(error)
-      this.hud.error('No se pudo cargar la escena. Revisa que existan public/models/escena.glb y public/data/escena.json.')
+      this.hud.error('No se pudo cargar la escena. Revisa que exista src/assets/models/escena.glb.')
     }
   }
 
