@@ -1,26 +1,17 @@
 import * as THREE from 'three'
 import vertexShader from '../shaders/clouds/vertex.glsl?raw'
 import fragmentShader from '../shaders/clouds/fragment.glsl?raw'
-import { CLOUDS, SKY, SUN_DISC } from '../config/scene.js'
+import { CLOUDS, SUN_DISC } from '../config/scene.js'
 import { linearColor } from '../utils/blender.js'
-
-/** Generador determinista (mulberry32) para que las nubes salgan siempre iguales */
-function seeded(seed) {
-  return () => {
-    seed |= 0
-    seed = (seed + 0x6d2b79f5) | 0
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
+import { seeded } from '../utils/random.js'
 
 /**
  * Nubes de algodón alrededor de la escena: cada nube es un racimo de esferas
  * (más grandes en el centro).
  */
 export default class Clouds {
-  constructor(scene, sunDirection) {
+  /** skyColors.uHorizonColor: el mismo uniform que el cielo, para la bruma de las nubes */
+  constructor(scene, sunDirection, skyColors) {
     const random = seeded(CLOUDS.seed)
     const range = ([min, max]) => min + random() * (max - min)
 
@@ -68,7 +59,7 @@ export default class Clouds {
         uLit: { value: linearColor(CLOUDS.lit) },
         uShadow: { value: linearColor(CLOUDS.shadow) },
         uRim: { value: linearColor(CLOUDS.rim) },
-        uHaze: { value: linearColor(SKY.horizon) },
+        uHaze: skyColors.uHorizonColor,
         uHazeAmount: { value: CLOUDS.haze },
         uWrap: { value: CLOUDS.wrap },
         uSoftEdge: { value: CLOUDS.softEdge }

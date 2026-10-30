@@ -19,7 +19,6 @@ import {
   PRINCIPLED_MATERIALS,
   EMISSION_MATERIALS,
   LENS,
-  SKY,
   ISLAND,
   WATER
 } from '../config/scene.js'
@@ -76,9 +75,11 @@ function rampUniforms({ pos, colors }) {
 
 export default class BlenderMaterials {
   /**
-   * @param {object} lighting  { sunDirection: Vector3 (hacia el sol), sunStrength, worldColor }
+   * @param {object} lighting  { sunDirection: Vector3 (hacia el sol), sunStrength, worldColor,
+   *                            skyColors: { uHorizonColor, uZenithColor } compartidos con el cielo }
    */
   constructor(lighting) {
+    this.skyColors = lighting.skyColors
     // Uniforms compartidos por referencia entre todos los materiales
     this.shared = {
       uSunDir: { value: lighting.sunDirection.clone() },
@@ -175,8 +176,8 @@ export default class BlenderMaterials {
         uIris: { value: linearColor(LENS.iris) },
         uGlow: { value: linearColor(LENS.glow) },
         uGlowStrength: { value: LENS.glowStrength },
-        uHorizon: { value: linearColor(SKY.horizon) },
-        uZenith: { value: linearColor(SKY.zenith) }
+        uHorizon: this.skyColors.uHorizonColor,
+        uZenith: this.skyColors.uZenithColor
       }
     })
 

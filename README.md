@@ -1,11 +1,12 @@
 # Robot in Water — PJ-03 en la orilla
 
-Escena 3D interactiva hecha con **Three.js** y **Vite**: el robot PJ-03 vigila el mar con su catalejo
-desde una roca, en una pequeña isla rodeada de un océano infinito, con nubes de algodón y un sol detrás.
+Escena 3D interactiva hecha con **Three.js** y **Vite**: el robot PJ-03 vigila el río con su catalejo
+desde una roca, en una pequeña isla en mitad del cauce, entre praderas de pasto, árboles de copa
+morada, nubes de algodón y un sol detrás.
 
 Es la conversión a la web de la escena de Blender `4-6 Object Assembly and Scene Setting.blend`:
-cada material se reescribió en GLSL nodo por nodo, y sobre esa base se añadieron cielo, mar, nubes
-y postproceso pensados para el navegador.
+cada material se reescribió en GLSL nodo por nodo, y sobre esa base se añadieron cielo, río, terreno,
+pasto, árboles, nubes y postproceso pensados para el navegador.
 
 **Diseño, modelado y desarrollo:** [nikocrow](https://nikocrow.dev)
 
@@ -23,7 +24,13 @@ npm run optimize:model  # recomprime assets-src/escena.glb -> src/assets/models/
 ```
 
 **Controles:** arrastra para girar la cámara y usa la rueda para acercar. El panel inferior pausa la
-animación o vuelve a la toma original de Blender, y el botón *Credits* abre la tarjeta del autor.
+animación, vuelve a la toma original de Blender o cambia de escenario, y el botón *Credits* abre la
+tarjeta del autor.
+
+**Escenarios:** el **río** (por defecto: la isla en mitad de un cauce, con pasto y árboles) y el
+**mar** original (la isla rodeada de un océano infinito, con la vista *Standard* de Blender). El botón
+*Ver el mar / Ver el río* los alterna sin recargar, y `?escena=mar` en la URL abre directamente el mar.
+Lo que cambia entre ellos está en `SCENARIOS` (`src/config/scene.js`).
 
 ## Qué hay en la escena
 
@@ -34,13 +41,18 @@ animación o vuelve a la toma original de Blender, y el botón *Credits* abre la
 | **Lente del catalejo** | Shader propio: cristal abombado, iris con paralaje y pupila que pulsa, reflejo del cielo y destellos cartoon. |
 | **Número del pecho** | El texto del `.blend` llegaba como cajas; se sustituye por "42261" con una fuente de Three.js, pegado al mismo hueso. |
 | **Isla** | La losa cuadrada de Blender se recorta con una silueta orgánica; el agua y la espuma de la cascada se conservan. |
-| **Mar infinito** | Se calcula en el shader del cielo intersectando cada rayo con el plano del agua: oleaje, espuma, reflejo del cielo, destellos del sol, orilla con espuma y bruma hacia el horizonte. |
+| **Terreno y río** | Malla de 160 × 160 m con ruido simplex, colinas en el borde y un cauce que atraviesa la isla (`world/nature/Terrain.js`). Los caminos, claros y orillas de tierra salen de `getPathMask`, horneada en una textura que usa el suelo. |
+| **Agua del río** | El suelo bajo el nivel del agua se descarta y ahí se ve el agua que calcula el shader del cielo intersectando cada rayo con el plano del agua: oleaje, espuma, reflejo, destellos del sol, espuma en las orillas y bruma igual a la niebla. Sigue los dos niveles del agua de la isla (salto en z ≈ 1). |
+| **Pasto** | ~150 000 hojas con GPU instancing sobre un `MeshLambertMaterial` modificado: viento, se aparta del puntero y usa la normal del terreno para un sombreado suave (`world/nature/Grass.js`). |
+| **Árboles** | Tronco toon y copa de cientos de quads en billboard con alphaMap de hojas; la sombra también tiene forma de hojas (`world/nature/Trees.js`). |
+| **Confeti** | Puntos morados y amarillos que flotan y giran. |
 | **Nubes** | Racimos de esferas instanciadas con luz envolvente y bordes translúcidos, tipo humo de algodón. |
 | **Sol** | Disco solar en el cielo, colocado delante de la cámara para que asome tras las nubes. La luz de la escena sigue siendo la de Blender. |
-| **Bloom** | `UnrealBloomPass` sobre un render HDR con MSAA; solo brilla lo que supera el umbral (espuma, sol, bordes). |
+| **Postproceso** | Render HDR con MSAA → bloom → tone mapping ACES → tilt-shift en dos pasadas → aberración cromática, color, viñeta y grano (`core/PostProcessing.js`). |
 
 Casi todo se ajusta desde [`src/config/scene.js`](src/config/scene.js): colores, tamaños, velocidades,
-forma de la isla, intensidad del bloom, altura mínima de la cámara, texto del pecho, etc.
+forma de la isla y del río, pasto, árboles, postproceso, altura mínima de la cámara, texto del pecho, etc.
+Con **`#debug`** en la URL aparecen controles (lil-gui) para casi todos ellos.
 
 ## Estructura
 
@@ -55,15 +67,16 @@ robot-agua-threejs/
 └─ src/
    ├─ main.js · Experience.js
    ├─ config/scene.js         # valores del .blend y parámetros de todo lo añadido
-   ├─ core/                   # Renderer (composer + bloom), CameraRig, Sizes
+   ├─ core/                   # Renderer, PostProcessing, CameraRig, Quality, Debug (lil-gui), Sizes
    ├─ materials/              # BlenderMaterials: un ShaderMaterial por material de Blender
    ├─ shaders/
-   │  ├─ lib/                 # réplica de los nodos (hash, voronoi, noise…) y silueta de la isla
+   │  ├─ lib/                 # réplica de los nodos (hash, voronoi, noise…), simplex 2D y silueta de la isla
    │  ├─ surface/vertex.glsl  # vertex shader común (coordenadas Object, atributos, sombras)
    │  ├─ materials/           # robot, terrain, splash, principled, emission, water, lens
-   │  ├─ sky/                 # cielo, sol y mar infinito
+   │  ├─ sky/                 # cielo, sol y agua del río
    │  └─ clouds/              # nubes
    ├─ world/                  # Sky, Clouds, Lights, Robot, RobotLabel, RockScatter, Droplets, World
+   │  └─ nature/              # Terrain (río), Grass, Trees, Confetti
    ├─ ui/                     # Hud, Credits
    ├─ assets/
    │  ├─ models/escena.glb    # el modelo comprimido con meshopt que carga la web
@@ -90,7 +103,8 @@ robot-agua-threejs/
 `Voronoi Texture` (hash PCG) y `Noise Texture` (Perlin con hash Jenkins) son réplicas exactas de
 Blender 5.1, verificadas contra los valores que devuelve Blender, así que los patrones coinciden.
 `Shader to RGB` se reproduce con la misma iluminación de la escena: sol de fuerza 5 y mundo
-gris 0.323 para los rayos que no son de cámara. La vista es *Standard*, sin tone mapping.
+gris 0.323 para los rayos que no son de cámara. En Blender la vista es *Standard*, sin tone mapping;
+aquí el postproceso aplica ACES por defecto para el pasto y los árboles (se cambia en `POST` o con `#debug`).
 
 Animaciones que no viajan en glTF y se recrean en los shaders:
 - **Espuma del agua**: driver `frame / 20` en la *Location Y* del Mapping (`water.frag.glsl`).
@@ -108,15 +122,15 @@ Diferencias conocidas con Blender:
 ## Rendimiento
 
 - Las nubes son un único `InstancedMesh` con esferas de baja resolución.
-- El cielo y el mar se dibujan después de la geometría opaca, así que el test de profundidad evita
-  calcularlos en los píxeles que tapa la isla.
+- El cielo y el agua se dibujan después de la geometría opaca, así que el test de profundidad evita
+  calcularlos en los píxeles que tapan la isla y el terreno.
+- El pasto es una sola malla instanciada (una hoja de 9 vértices) que no proyecta sombras.
 - El canvas no tiene MSAA ni profundidad propios: la escena se dibuja en el render target del composer.
 - **Calidad adaptativa** (`core/Quality.js`): si el equipo no llega a ~60 fps, baja de nivel
-  (resolución en pantallas Retina de 2× hacia 1×, sombra de 4096 a 2048). Con densidad ≥ 1.75×
-  usa MSAA 2× en vez de 4×, porque los bordes ya son finos. Los niveles están en `QUALITY`.
+  (resolución de 1.5× hacia 0.85×, sombra de 4096 a 2048). Los niveles están en `QUALITY`.
 - **`?debug`** en la URL muestra fps, ms por frame, tiempo de GPU, nivel, resolución, draw calls y
   triángulos, y permite forzar un nivel. `?quality=N` fija el nivel sin ajuste automático.
-- La cámara no baja de `CAMERA.minHeight`, para no quedar a ras del agua.
+- La cámara no baja de `CAMERA.minHeight` ni se mete en el terreno.
 - El modelo se precarga desde el HTML, en paralelo con el JS, y lleva hash en el nombre:
   Vercel lo sirve con brotli y caché inmutable, así que las visitas repetidas no lo descargan.
 - Los shaders se compilan durante la pantalla de carga, así que los primeros frames no dan tirones.

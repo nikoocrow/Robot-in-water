@@ -4,7 +4,7 @@ import { CAMERA } from '../config/scene.js'
 
 /**
  * Arranca en la misma toma que la cámara de Blender y permite orbitar,
- * sin bajar nunca a ras del agua.
+ * sin bajar nunca a ras del agua ni meterse en el terreno.
  */
 export default class CameraRig {
   constructor(canvas, sizes) {
@@ -15,7 +15,9 @@ export default class CameraRig {
     this.controls = new OrbitControls(this.instance, canvas)
     this.controls.enableDamping = true
     this.controls.minDistance = 1
-    this.controls.maxDistance = 25
+    this.controls.maxDistance = 25 // cada escenario pone la suya (SCENARIOS[x].camera)
+    // Altura del suelo bajo la cámara (la pone World cuando existe el terreno)
+    this.groundHeight = () => -Infinity
 
     this.home = { position: new THREE.Vector3(4, 1.5, 6), target: new THREE.Vector3(0, 1, 0) }
   }
@@ -55,8 +57,10 @@ export default class CameraRig {
   update() {
     this.controls.update()
     // OrbitControls recalcula la órbita desde la posición, así que basta con corregirla
-    if (this.instance.position.y < CAMERA.minHeight) {
-      this.instance.position.y = CAMERA.minHeight
+    const { x, z } = this.instance.position
+    const minHeight = Math.max(CAMERA.minHeight, this.groundHeight(x, z) + CAMERA.aboveTerrain)
+    if (this.instance.position.y < minHeight) {
+      this.instance.position.y = minHeight
       this.instance.lookAt(this.controls.target)
     }
   }

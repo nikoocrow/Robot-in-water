@@ -10,6 +10,7 @@
     "optimize:model": "node scripts/optimize-model.mjs"
   },
   "dependencies": {
+    "lil-gui": "^0.20.0",
     "three": "0.180.0"
   },
   "devDependencies": {

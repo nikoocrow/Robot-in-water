@@ -1,0 +1,277 @@
+import * as THREE from 'three'
+import simplexLib from '../../shaders/lib/simplex2d.glsl?raw'
+import { GRASS, TERRAIN } from '../../config/scene.js'
+import { seeded } from '../../utils/random.js'
+
+const { smoothstep } = THREE.MathUtils
+
+/**
+ * Campo de pasto con GPU instancing: una hoja de pocos vértices repetida
+ * ~200 000 veces. Viento, interacción y forma se calculan en el vertex shader
+ * de un MeshLambertMaterial, así hereda luces, sombras y niebla de three.
+ */
+export default class Grass {
+  constructor(scene, debug, terrain) {
+    this.terrain = terrain
+    this.params = {
+      count: GRASS.count,
+      segments: GRASS.segments,
+      baseColor: GRASS.baseColor,
+      tipColor: GRASS.tipColor,
+      patchColor: GRASS.patchColor
+    }
+
+    const { wind, interaction } = GRASS
+    this.uniforms = {
+      uTime: { value: 0 },
+      uHeight: { value: GRASS.height },
+      uWidth: { value: GRASS.width },
+      uNormalBlend: { value: GRASS.normalBlend },
+      uWindStrength: { value: wind.strength },
+      uWindSpeed: { value: wind.speed },
+      uWindFrequency: { value: wind.frequency },
+      uWindDir: { value: new THREE.Vector2(...wind.direction).normalize() },
+      uInteractPos: { value: new THREE.Vector3(0, -100, 0) },
+      uInteractRadius: { value: interaction.radius },
+      uInteractStrength: { value: interaction.strength },
+      uBaseColor: { value: new THREE.Color(GRASS.baseColor) },
+      uTipColor: { value: new THREE.Color(GRASS.tipColor) },
+      uPatchColor: { value: new THREE.Color(GRASS.patchColor) },
+      uPatchStrength: { value: GRASS.patchStrength }
+    }
+
+    // Objetivo de la interacción (raycast del ratón); uInteractPos lo sigue suavizado
+    this.interactTarget = this.uniforms.uInteractPos.value.clone()
+    this.previousTime = 0
+
+    this.mesh = new THREE.Mesh(this.buildGeometry(), this.buildMaterial())
+    this.mesh.frustumCulled = false
+    this.mesh.receiveShadow = true
+    scene.add(this.mesh)
+
+    this.setupDebug(debug)
+  }
+
+  /** Una hoja: dos vértices por nivel que se estrechan hacia la punta */
+  bladeGeometry(segments) {
+    const positions = []
+    const indices = []
+    for (let i = 0; i < segments; i++) {
+      const t = i / segments
+      const half = 0.5 * (1 - Math.pow(t, 1.3))
+      positions.push(-half, t, 0, half, t, 0)
+      if (i < segments - 1) {
+        const a = i * 2
+        indices.push(a, a + 1, a + 3, a, a + 3, a + 2)
+      }
+    }
+    const tip = segments * 2
+    positions.push(0, 1, 0)
+    indices.push(tip - 2, tip - 1, tip)
+    return { positions, indices }
+  }
+
+  buildGeometry() {
+    const { positions, indices } = this.bladeGeometry(this.params.segments)
+    const geometry = new THREE.InstancedBufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    // Se reemplaza en el shader; three la necesita para declarar la normal
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(positions.length), 3))
+    geometry.setIndex(indices)
+
+    const random = seeded(GRASS.seed)
+    const max = this.params.count
+    const offsets = new Float32Array(max * 3)
+    const params = new Float32Array(max * 4)
+    const normals = new Float32Array(max * 3)
+    const normal = new THREE.Vector3()
+    const half = TERRAIN.grassArea / 2
+    let count = 0
+
+    const add = (x, z, scale) => {
+      const k = count++
+      offsets.set([x, this.terrain.getHeight(x, z), z], k * 3)
+      // Más bajas cerca del final del área, para que el borde no se note
+      const edge = 1 - smoothstep(Math.max(Math.abs(x), Math.abs(z)), half - 6, half) * 0.7
+      params.set([random() * Math.PI * 2, scale * edge * (0.75 + random() * 0.5), 0.7 + random() * 0.6, random()], k * 4)
+      this.terrain.getNormal(x, z, normal).toArray(normals, k * 3)
+    }
+
+    // Matas sueltas dentro de la tierra (≈1,2 % de las hojas)
+    const tuftBlades = Math.round(max * 0.012)
+    const tufts = []
+    while (tufts.length < 40) {
+      const x = (random() - 0.5) * TERRAIN.grassArea
+      const z = (random() - 0.5) * TERRAIN.grassArea
+      const mask = this.terrain.getPathMask(x, z)
+      const dry = this.terrain.getHeight(x, z) > this.terrain.waterLevel(z) + 0.15
+      // En el talud de la orilla colgarían como cortinas
+      const flat = this.terrain.getNormal(x, z, normal).y > 0.95
+      if (mask > 0.6 && dry && flat) tufts.push([x, z])
+    }
+
+    for (let i = 0; i < max - tuftBlades; i++) {
+      const x = (random() - 0.5) * TERRAIN.grassArea
+      const z = (random() - 0.5) * TERRAIN.grassArea
+      const mask = this.terrain.getPathMask(x, z)
+      if (mask > 0.55) continue
+      add(x, z, 1 - smoothstep(mask, 0.05, 0.55) * 0.75)
+    }
+    for (let i = 0; i < tuftBlades && count < max; i++) {
+      const [cx, cz] = tufts[i % tufts.length]
+      const angle = random() * Math.PI * 2
+      const radius = Math.sqrt(random()) * 0.55
+      add(cx + Math.cos(angle) * radius, cz + Math.sin(angle) * radius, 0.55 + random() * 0.35)
+    }
+
+    geometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets.subarray(0, count * 3), 3))
+    geometry.setAttribute('aParams', new THREE.InstancedBufferAttribute(params.subarray(0, count * 4), 4))
+    geometry.setAttribute('aTerrainNormal', new THREE.InstancedBufferAttribute(normals.subarray(0, count * 3), 3))
+    geometry.instanceCount = count
+    this.count = count
+    return geometry
+  }
+
+  buildMaterial() {
+    const material = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide })
+    material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, this.uniforms)
+
+      shader.vertexShader = /* glsl */ `
+        attribute vec3 aOffset;
+        attribute vec4 aParams;
+        attribute vec3 aTerrainNormal;
+        uniform float uTime;
+        uniform float uHeight;
+        uniform float uWidth;
+        uniform float uNormalBlend;
+        uniform float uWindStrength;
+        uniform float uWindSpeed;
+        uniform float uWindFrequency;
+        uniform vec2 uWindDir;
+        uniform vec3 uInteractPos;
+        uniform float uInteractRadius;
+        uniform float uInteractStrength;
+        varying float vH;
+        varying float vRand;
+        varying float vPatch;
+        ${simplexLib}
+      ` + shader.vertexShader
+        .replace('#include <beginnormal_vertex>', /* glsl */ `
+          float h = position.y;
+          float angle = aParams.x;
+          float height = uHeight * aParams.y;
+          float width = uWidth * aParams.z;
+          float rand = aParams.w;
+
+          // Viento: ráfagas de ruido que avanzan en la dirección del viento
+          float gust = snoise(aOffset.xz * uWindFrequency - uTime * uWindSpeed * uWindDir) * 0.5 + 0.5;
+          vec2 bend = uWindDir * (gust * 0.9 + 0.2) * uWindStrength;
+          bend += sin(uTime * 3.0 + rand * 6.2831) * 0.06 * uWindDir;
+
+          // Interacción: se apartan del puntero
+          vec2 away = aOffset.xz - uInteractPos.xz;
+          float dist = length(away);
+          float push = (1.0 - smoothstep(0.0, uInteractRadius, dist)) * uInteractStrength;
+          bend += away / max(dist, 1e-3) * push;
+
+          // Hoja local con una inclinación aleatoria, girada en Y
+          float lean = (rand - 0.5) * 0.6;
+          vec3 blade = vec3(position.x * width, h * height, h * h * lean * height);
+          float c = cos(angle);
+          float s = sin(angle);
+          blade = vec3(blade.x * c + blade.z * s, blade.y, -blade.x * s + blade.z * c);
+
+          // Doblado proporcional a h² (la raíz queda fija), conservando el largo
+          float bendLen = min(length(bend), 1.3);
+          bend = bendLen > 0.0 ? normalize(bend) * bendLen : bend;
+          blade.xz += bend * h * h * height;
+          blade.y -= bendLen * bendLen * h * h * height * 0.3;
+
+          vec3 grassPos = aOffset + blade;
+
+          // Normal casi la del terreno: sombreado suave tipo pintura, sigue las colinas
+          vec3 bladeNormal = normalize(vec3(s, 0.35, c));
+          vec3 objectNormal = normalize(mix(aTerrainNormal, bladeNormal, uNormalBlend));
+
+          vH = h;
+          vRand = rand;
+          vPatch = snoise(aOffset.xz * 0.07) * 0.5 + 0.5;
+        `)
+        .replace('#include <begin_vertex>', 'vec3 transformed = grassPos;')
+
+      shader.fragmentShader = /* glsl */ `
+        uniform vec3 uBaseColor;
+        uniform vec3 uTipColor;
+        uniform vec3 uPatchColor;
+        uniform float uPatchStrength;
+        varying float vH;
+        varying float vRand;
+        varying float vPatch;
+      ` + shader.fragmentShader
+        .replace('#include <color_fragment>', /* glsl */ `
+          vec3 tip = mix(uTipColor, uPatchColor, smoothstep(0.35, 0.75, vPatch) * uPatchStrength);
+          diffuseColor.rgb = mix(uBaseColor, tip, smoothstep(0.0, 0.9, vH)) * (0.9 + vRand * 0.2);
+        `)
+        // Con DoubleSide three invierte la normal en las caras traseras: se deshace
+        .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+          normal = normalize(vNormal);`)
+    }
+    material.customProgramCacheKey = () => 'grass'
+    return material
+  }
+
+  rebuild() {
+    this.mesh.geometry.dispose()
+    this.mesh.geometry = this.buildGeometry()
+  }
+
+  /** Punto del mundo que aparta el pasto (null = ninguno) */
+  setInteraction(point) {
+    if (point) this.interactTarget.copy(point)
+    else this.interactTarget.set(0, -100, 0)
+  }
+
+  update(time) {
+    const delta = Math.min(time - this.previousTime, 0.1)
+    this.previousTime = time
+    this.uniforms.uTime.value = time
+
+    const current = this.uniforms.uInteractPos.value
+    // Si el puntero sale del terreno, salta lejos en vez de arrastrarse por el campo
+    if (this.interactTarget.y < -50 || current.y < -50) current.copy(this.interactTarget)
+    else current.lerp(this.interactTarget, 1 - Math.exp(-delta * 10))
+  }
+
+  setupDebug(debug) {
+    const folder = debug.folder('Pasto')
+    if (!folder) return
+    const u = this.uniforms
+
+    folder.add(this.params, 'count', 10000, 400000, 10000).name('cantidad').onFinishChange(() => this.rebuild())
+    folder.add(this.params, 'segments', 1, 8, 1).name('segmentos').onFinishChange(() => this.rebuild())
+    folder.add(u.uHeight, 'value', 0.1, 2, 0.01).name('altura')
+    folder.add(u.uWidth, 'value', 0.02, 0.4, 0.005).name('ancho')
+    folder.add(u.uNormalBlend, 'value', 0, 1, 0.01).name('mezcla normales')
+
+    const wind = folder.addFolder('Viento').close()
+    const dir = { x: GRASS.wind.direction[0], z: GRASS.wind.direction[1] }
+    const setDir = () => u.uWindDir.value.set(dir.x, dir.z).normalize()
+    wind.add(u.uWindStrength, 'value', 0, 1.5, 0.01).name('fuerza')
+    wind.add(u.uWindSpeed, 'value', 0, 2, 0.01).name('velocidad')
+    wind.add(u.uWindFrequency, 'value', 0.01, 0.5, 0.005).name('frecuencia')
+    wind.add(dir, 'x', -1, 1, 0.01).name('dirección x').onChange(setDir)
+    wind.add(dir, 'z', -1, 1, 0.01).name('dirección z').onChange(setDir)
+
+    const interact = folder.addFolder('Interacción').close()
+    interact.add(u.uInteractRadius, 'value', 0, 5, 0.05).name('radio')
+    interact.add(u.uInteractStrength, 'value', 0, 3, 0.05).name('fuerza')
+
+    // Hex en params: el THREE.Color está en espacio lineal
+    const colors = folder.addFolder('Colores').close()
+    colors.addColor(this.params, 'baseColor').name('base').onChange((hex) => u.uBaseColor.value.set(hex))
+    colors.addColor(this.params, 'tipColor').name('punta').onChange((hex) => u.uTipColor.value.set(hex))
+    colors.addColor(this.params, 'patchColor').name('manchas').onChange((hex) => u.uPatchColor.value.set(hex))
+    colors.add(u.uPatchStrength, 'value', 0, 1, 0.01).name('fuerza manchas')
+  }
+}

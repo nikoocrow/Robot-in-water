@@ -1,5 +1,5 @@
 export default class Hud {
-  constructor({ onToggleAnimation, onResetCamera }) {
+  constructor({ onToggleAnimation, onResetCamera, onToggleScenario }) {
     this.loader = document.querySelector('.loader')
     this.loaderFill = this.loader.querySelector('.loader__fill')
     this.loaderValue = this.loader.querySelector('.loader__value')
@@ -21,8 +21,19 @@ export default class Hud {
         case 'reset-camera':
           onResetCamera()
           break
+        case 'toggle-scenario':
+          onToggleScenario()
+          break
       }
     })
+  }
+
+  /** El botón ofrece ir al otro escenario */
+  setScenario(name) {
+    const button = this.panel.querySelector('[data-action="toggle-scenario"]')
+    const sea = name === 'sea'
+    button.setAttribute('aria-pressed', String(sea))
+    button.textContent = sea ? 'Ver el río' : 'Ver el mar'
   }
 
   setProgress(ratio) {

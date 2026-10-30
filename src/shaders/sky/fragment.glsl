@@ -12,10 +12,10 @@ uniform float uSunSize;
 uniform float uSunIntensity;
 uniform float uSunGlow;
 
-// Mar infinito: plano analítico bajo el horizonte (no viene del .blend)
+// Agua del río: plano analítico bajo el horizonte (no viene del .blend).
+// Solo se ve donde el terreno queda bajo el agua (el material del suelo se descarta)
 uniform vec3 uCameraPos;
 uniform float uTime;
-uniform float uSeaLevel;
 uniform vec3 uSeaShallow;
 uniform vec3 uSeaDeep;
 uniform vec3 uSeaFoam;
@@ -23,10 +23,25 @@ uniform float uSeaScale;
 uniform float uSeaSpeed;
 uniform float uSeaReflection;
 uniform float uSeaSparkle;
-uniform vec2 uSeaHaze;       // distancia donde empieza / termina la bruma
+uniform vec2 uSeaHaze;       // distancia donde empieza / termina la bruma (= niebla)
 
-// Orilla de la isla
-uniform float uLowLevel;     // agua de la mitad delantera, más baja
+// 1 = río (el agua solo se ve en el cauce), 0 = mar infinito alrededor de la isla
+uniform float uRiverMode;
+// Nivel de arriba / de abajo y tramo z del salto
+uniform vec2 uRiverLevel;
+uniform vec2 uRiverStep;
+// Máscara del terreno, indexada por xz de mundo.
+// G = distancia al borde del cauce (-1..10 m); la línea del agua está uWaterline más afuera
+uniform sampler2D uRiverMask;
+uniform float uWaterline;
+uniform float uTerrainSize;
+// Cauce (mismos valores que Terrain.js) y velocidad de la corriente en m/s
+uniform vec2 uRiverMeander;
+uniform vec2 uRiverWidth;    // semiancho junto a la isla / del resto
+uniform vec2 uRiverNarrow;   // tramo |z| en el que pasa de uno a otro
+uniform float uRiverSpeed;
+
+// Orillas
 uniform vec3 uShoreColor;
 uniform float uShoreFoam;
 
@@ -79,18 +94,37 @@ vec3 voronoi(vec2 p, float time) {
   return vec3(f1, f2 - f1, id);
 }
 
-// Junto a la mitad delantera de la isla el mar baja hasta su nivel de agua,
-// para que la orilla coincida con el borde; lejos vuelve al nivel general
+// El río salta del nivel de atrás al de delante, igual que el agua de la isla.
+// En el mar solo baja junto a la mitad delantera de la isla, para que la orilla coincida
+// con el borde; lejos vuelve al nivel general
 float seaLevelAt(vec2 p) {
-  float front = smoothstep(0.2, 1.4, p.y);
-  float near = 1.0 - smoothstep(1.0, 8.0, islandDistance(p));
-  return mix(uSeaLevel, uLowLevel, front * near);
+  float front = smoothstep(uRiverStep.x, uRiverStep.y, p.y);
+  if (uRiverMode < 0.5) front *= 1.0 - smoothstep(1.0, 8.0, islandDistance(p));
+  return mix(uRiverLevel.x, uRiverLevel.y, front);
+}
+
+// Centro del cauce en x: recto junto a la isla, serpentea lejos (= Terrain.riverCenter)
+float riverCenter(float z) {
+  float fade = smoothstep(6.0, 20.0, abs(z));
+  return (sin(z * 0.075 + 0.6) * uRiverMeander.x + sin(z * 0.16 + 2.0) * uRiverMeander.y) * fade;
+}
+
+// Coordenadas de la corriente en metros: x = a través del cauce, y = a lo largo (río abajo = +z).
+// Siguen las curvas, se juntan donde el río se estrecha y rodean la isla como un flujo
+// potencial alrededor de un obstáculo (función de corriente y potencial de un cilindro)
+vec2 riverFlow(vec2 p) {
+  float halfWidth = mix(uRiverWidth.x, uRiverWidth.y, smoothstep(uRiverNarrow.x, uRiverNarrow.y, abs(p.y)));
+  float across = (p.x - riverCenter(p.y)) * uRiverWidth.x / halfWidth;
+  float r = max(length(p), 1e-3);
+  float radius = max(r - islandDistance(p), 0.1);   // borde de la isla en esa dirección
+  float k = min(radius * radius / (r * r), 1.0);
+  return vec2(across * (1.0 - k), p.y * (1.0 + k));
 }
 
 vec3 sea(vec3 dir) {
   // Intersección con una superficie de altura variable por punto fijo.
   // Altura mínima para que el mar nunca desaparezca si la cámara baja
-  float level = uSeaLevel;
+  float level = uRiverLevel.x;
   float dist = 0.0;
   vec2 world = uCameraPos.xz;
   for (int i = 0; i < 4; i++) {
@@ -105,27 +139,48 @@ vec3 sea(vec3 dir) {
   // El detalle se apaga con la distancia para evitar parpadeo y moiré
   float detail = 1.0 - smoothstep(uSeaHaze.x * 0.4, uSeaHaze.x * 1.5, dist);
 
+  bool river = uRiverMode > 0.5;
+  // Río: todo el patrón se arrastra río abajo por las coordenadas de la corriente
+  vec2 flow = river ? riverFlow(world) - vec2(0.0, uTime * uRiverSpeed) : world;
+
   // Manchas por celdas, como el suelo que se ve a través del agua de Blender
-  vec3 patches = voronoi(world * uSeaScale, uTime * 0.15);
+  vec3 patches = voronoi(flow * uSeaScale, uTime * 0.15);
   vec3 color = mix(uSeaShallow, uSeaDeep, patches.z * detail);
 
-  // Espuma: crestas cortas en los bordes de celdas pequeñas y estiradas
-  vec2 uv = vec2(world.x * 0.5, world.y) * uSeaScale * 3.0 + vec2(0.0, uTime * uSeaSpeed);
-  vec3 waves = voronoi(uv, uTime * 0.8);
+  // Espuma. Mar: crestas cortas en celdas estiradas a lo ancho que avanzan hacia la orilla.
+  // Río: rayas largas estiradas en el sentido de la corriente
+  vec2 uv = river
+    ? vec2(flow.x * 2.2, flow.y * 0.3) * uSeaScale
+    : vec2(world.x * 0.5, world.y) * uSeaScale * 3.0 + vec2(0.0, uTime * uSeaSpeed);
+  vec3 waves = voronoi(uv, uTime * (river ? 0.3 : 0.8));
   float aa = fwidth(waves.y) + 1e-4;
   float foam = 1.0 - smoothstep(0.03 - aa, 0.03 + aa, waves.y);
-  foam *= smoothstep(0.72, 0.8, noise(uv * 0.6 + 3.7)) * smoothstep(0.25, 0.6, waves.x);
-  foam *= 1.0 - smoothstep(10.0, 40.0, dist);
+  // En el río hay más rayas y se ven más lejos
+  float sparse = river ? 0.55 : 0.72;
+  foam *= smoothstep(sparse, sparse + 0.08, noise(uv * 0.6 + 3.7)) * smoothstep(0.25, 0.6, waves.x);
+  foam *= 1.0 - smoothstep(river ? 18.0 : 10.0, river ? 55.0 : 40.0, dist);
   color = mix(color, uSeaFoam, foam);
 
-  // Orilla: agua clara, espuma de contacto y ondas que se alejan de la costa
+  // Orillas (de la isla y del río): agua clara, espuma de contacto y ondas.
+  // Distancia a la orilla del río: la horneada en la máscara, desde la línea del agua
   float shore = islandDistance(world);
-  color = mix(uShoreColor, color, smoothstep(0.0, 3.5, shore));
-  float contact = 1.0 - smoothstep(0.0, 0.3 + 0.25 * noise(world * 2.0 + uTime * 0.4), shore);
-  float ripple = sin(shore * 5.0 - uTime * 1.6 + noise(world * 1.3) * 4.0);
+  float rippleShore = shore;
+  if (river) {
+    float inside = texture2D(uRiverMask, world / uTerrainSize + 0.5).g * 11.0 - 1.0;
+    // Las líneas de orilla solo siguen las márgenes (paralelas a la corriente); alrededor
+    // de la isla serían concéntricas y cruzarían el agua río abajo
+    rippleShore = max(inside + uWaterline, 0.0);
+    shore = min(shore, rippleShore);
+  }
+  color = mix(uShoreColor, color, smoothstep(0.0, 2.5, shore));
+  // Mar: ondas que se alejan de la costa. Río: líneas paralelas a la orilla, a trozos
+  // que bajan con la corriente
+  vec2 shoreNoise = river ? vec2(flow.x * 1.1, flow.y * 0.3) : world * 1.1 - uTime * 0.15;
+  float contact = 1.0 - smoothstep(0.0, 0.3 + 0.25 * noise((river ? flow : world) * 2.0 + uTime * 0.4), shore);
+  float ripple = sin(rippleShore * 5.0 - (river ? 0.0 : uTime * 1.6) + noise(world * 1.3) * 4.0);
   float rings = smoothstep(0.82, 0.95, ripple)
-              * (1.0 - smoothstep(0.4, 2.8, shore))
-              * smoothstep(0.35, 0.55, noise(world * 1.1 - uTime * 0.15));
+              * (1.0 - smoothstep(0.4, 2.8, rippleShore))
+              * smoothstep(0.35, 0.55, noise(shoreNoise));
   color = mix(color, uSeaFoam * uShoreFoam, max(contact, rings * 0.8));
 
   // Normal con un poco de oleaje para el reflejo y los destellos
@@ -142,9 +197,11 @@ vec3 sea(vec3 dir) {
   float sparkle = smoothstep(0.9990, 0.9996, dot(R, uSunDiscDir)) * step(0.5, noise(uv * 4.0));
   color += uSunColor * sparkle * uSeaSparkle;
 
-  // Bruma hacia el horizonte: se funde con el color del cielo a ras de agua
+  // Bruma. Río: la misma que la niebla del terreno (color del horizonte).
+  // Mar: se funde con el cielo a ras de agua
   float haze = smoothstep(uSeaHaze.x, uSeaHaze.y, dist);
-  return mix(color, skyColor(normalize(vec3(dir.x, 0.0, dir.z))), haze);
+  vec3 hazeColor = uRiverMode > 0.5 ? uHorizonColor : skyColor(normalize(vec3(dir.x, 0.0, dir.z)));
+  return mix(color, hazeColor, haze);
 }
 
 void main() {
