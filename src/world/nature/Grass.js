@@ -44,10 +44,10 @@ export default class Grass {
     this.interactTarget = this.uniforms.uInteractPos.value.clone()
     this.previousTime = 0
 
-    this.mesh = new THREE.Mesh(this.buildGeometry(), this.buildMaterial())
-    this.mesh.frustumCulled = false
-    this.mesh.receiveShadow = true
-    scene.add(this.mesh)
+    this.material = this.buildMaterial()
+    this.group = new THREE.Group()
+    this.buildChunks()
+    scene.add(this.group)
 
     this.setupDebug(debug)
   }
@@ -71,30 +71,42 @@ export default class Grass {
     return { positions, indices }
   }
 
-  buildGeometry() {
+  /**
+   * Reparte las hojas en trozos de GRASS.chunk metros, cada uno con su esfera envolvente:
+   * three no dibuja los que quedan fuera de cámara y los lejanos se aclaran (update)
+   */
+  buildChunks() {
     const { positions, indices } = this.bladeGeometry(this.params.segments)
-    const geometry = new THREE.InstancedBufferGeometry()
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    // Se reemplaza en el shader; three la necesita para declarar la normal
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(positions.length), 3))
-    geometry.setIndex(indices)
+    const blade = {
+      position: new THREE.Float32BufferAttribute(positions, 3),
+      // Se reemplaza en el shader; three la necesita para declarar la normal
+      normal: new THREE.Float32BufferAttribute(new Float32Array(positions.length), 3),
+      index: new THREE.Uint16BufferAttribute(indices, 1)
+    }
 
     const random = seeded(GRASS.seed)
     const max = this.params.count
-    const offsets = new Float32Array(max * 3)
-    const params = new Float32Array(max * 4)
-    const normals = new Float32Array(max * 3)
     const normal = new THREE.Vector3()
     const half = TERRAIN.grassArea / 2
+    const side = Math.ceil(TERRAIN.grassArea / GRASS.chunk)
+    const buckets = Array.from({ length: side * side }, () => [])
+    const noise = this.terrain.noise
     let count = 0
 
     const add = (x, z, scale) => {
-      const k = count++
-      offsets.set([x, this.terrain.getHeight(x, z), z], k * 3)
+      count++
       // Más bajas cerca del final del área, para que el borde no se note
       const edge = 1 - smoothstep(Math.max(Math.abs(x), Math.abs(z)), half - 6, half) * 0.7
-      params.set([random() * Math.PI * 2, scale * edge * (0.75 + random() * 0.5), 0.7 + random() * 0.6, random()], k * 4)
-      this.terrain.getNormal(x, z, normal).toArray(normals, k * 3)
+      this.terrain.getNormal(x, z, normal)
+      const ix = THREE.MathUtils.clamp(Math.floor((x + half) / GRASS.chunk), 0, side - 1)
+      const iz = THREE.MathUtils.clamp(Math.floor((z + half) / GRASS.chunk), 0, side - 1)
+      buckets[iz * side + ix].push([
+        x, this.terrain.getHeight(x, z), z,
+        random() * Math.PI * 2, scale * edge * (0.75 + random() * 0.5), 0.7 + random() * 0.6, random(),
+        normal.x, normal.y, normal.z,
+        // Manchas de color: ruido fijo por hoja, calculado aquí y no en cada vértice
+        noise.noise(x * 0.07, z * 0.07) * 0.5 + 0.5
+      ])
     }
 
     // Matas sueltas dentro de la tierra (≈1,2 % de las hojas)
@@ -123,13 +135,49 @@ export default class Grass {
       const radius = Math.sqrt(random()) * 0.55
       add(cx + Math.cos(angle) * radius, cz + Math.sin(angle) * radius, 0.55 + random() * 0.35)
     }
-
-    geometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets.subarray(0, count * 3), 3))
-    geometry.setAttribute('aParams', new THREE.InstancedBufferAttribute(params.subarray(0, count * 4), 4))
-    geometry.setAttribute('aTerrainNormal', new THREE.InstancedBufferAttribute(normals.subarray(0, count * 3), 3))
-    geometry.instanceCount = count
     this.count = count
-    return geometry
+
+    this.chunks = []
+    for (const blades of buckets) {
+      if (!blades.length) continue
+      // Orden aleatorio: al dibujar solo las primeras N hojas el trozo se aclara por igual
+      for (let i = blades.length - 1; i > 0; i--) {
+        const j = Math.floor(random() * (i + 1))
+        ;[blades[i], blades[j]] = [blades[j], blades[i]]
+      }
+
+      const n = blades.length
+      const offsets = new Float32Array(n * 3)
+      const params = new Float32Array(n * 4)
+      const normals = new Float32Array(n * 3)
+      const patches = new Float32Array(n)
+      const box = new THREE.Box3()
+      blades.forEach((b, k) => {
+        offsets.set(b.slice(0, 3), k * 3)
+        params.set(b.slice(3, 7), k * 4)
+        normals.set(b.slice(7, 10), k * 3)
+        patches[k] = b[10]
+        box.expandByPoint(normal.set(b[0], b[1], b[2]))
+      })
+
+      const geometry = new THREE.InstancedBufferGeometry()
+      geometry.setAttribute('position', blade.position)
+      geometry.setAttribute('normal', blade.normal)
+      geometry.setIndex(blade.index)
+      geometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3))
+      geometry.setAttribute('aParams', new THREE.InstancedBufferAttribute(params, 4))
+      geometry.setAttribute('aTerrainNormal', new THREE.InstancedBufferAttribute(normals, 3))
+      geometry.setAttribute('aPatch', new THREE.InstancedBufferAttribute(patches, 1))
+      geometry.instanceCount = n
+      // Margen para la altura de las hojas y lo que se doblan con el viento o el puntero
+      geometry.boundingSphere = box.getBoundingSphere(new THREE.Sphere())
+      geometry.boundingSphere.radius += 3
+
+      const mesh = new THREE.Mesh(geometry, this.material)
+      mesh.receiveShadow = true
+      this.group.add(mesh)
+      this.chunks.push({ mesh, total: n })
+    }
   }
 
   buildMaterial() {
@@ -141,6 +189,7 @@ export default class Grass {
         attribute vec3 aOffset;
         attribute vec4 aParams;
         attribute vec3 aTerrainNormal;
+        attribute float aPatch;
         uniform float uTime;
         uniform float uHeight;
         uniform float uWidth;
@@ -196,7 +245,7 @@ export default class Grass {
 
           vH = h;
           vRand = rand;
-          vPatch = snoise(aOffset.xz * 0.07) * 0.5 + 0.5;
+          vPatch = aPatch;
         `)
         .replace('#include <begin_vertex>', 'vec3 transformed = grassPos;')
 
@@ -222,8 +271,9 @@ export default class Grass {
   }
 
   rebuild() {
-    this.mesh.geometry.dispose()
-    this.mesh.geometry = this.buildGeometry()
+    for (const { mesh } of this.chunks) mesh.geometry.dispose()
+    this.group.clear()
+    this.buildChunks()
   }
 
   /** Punto del mundo que aparta el pasto (null = ninguno) */
@@ -232,7 +282,17 @@ export default class Grass {
     else this.interactTarget.set(0, -100, 0)
   }
 
-  update(time) {
+  /** camera: para aclarar los trozos lejanos, que ya quedan bajo la niebla y el tilt-shift */
+  update(time, camera) {
+    if (camera) {
+      const { near, far, min } = GRASS.lod
+      for (const { mesh, total } of this.chunks) {
+        const distance = camera.position.distanceTo(mesh.geometry.boundingSphere.center)
+        const density = 1 - smoothstep(distance, near, far) * (1 - min)
+        mesh.geometry.instanceCount = Math.ceil(total * density)
+      }
+    }
+
     const delta = Math.min(time - this.previousTime, 0.1)
     this.previousTime = time
     this.uniforms.uTime.value = time

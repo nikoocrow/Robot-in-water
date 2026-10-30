@@ -124,10 +124,19 @@ Diferencias conocidas con Blender:
 - Las nubes son un único `InstancedMesh` con esferas de baja resolución.
 - El cielo y el agua se dibujan después de la geometría opaca, así que el test de profundidad evita
   calcularlos en los píxeles que tapan la isla y el terreno.
-- El pasto es una sola malla instanciada (una hoja de 9 vértices) que no proyecta sombras.
+- El pasto (una hoja de 9 vértices instanciada) va en trozos de 8 × 8 m: los que quedan fuera de
+  cámara no se dibujan y los lejanos, ya bajo la niebla y el tilt-shift, se aclaran (`GRASS.lod`).
+  No proyecta sombras y el ruido de las manchas de color se calcula una vez por hoja en la CPU.
+- El terreno no dibuja los triángulos que quedan enteros bajo el agua, y solo la franja de la orilla
+  usa `discard`: el resto es opaco puro, lo que mejor aprovechan las GPU por tiles (Apple M1/M2…).
+- Postproceso en dos pases a pantalla tras el bloom: el tilt-shift horizontal y un pase final que
+  junta el vertical, el tone mapping, la conversión a sRGB y el color. Solo la textura de la escena
+  lleva MSAA, y el bloom se calcula a media resolución.
+- El rayo del puntero (para apartar el pasto) se lanza como mucho una vez por frame.
 - El canvas no tiene MSAA ni profundidad propios: la escena se dibuja en el render target del composer.
 - **Calidad adaptativa** (`core/Quality.js`): si el equipo no llega a ~60 fps, baja de nivel
-  (resolución de 1.5× hacia 0.85×, sombra de 4096 a 2048). Los niveles están en `QUALITY`.
+  (resolución de 1.5× hacia 0.85×, sombra de 4096 a 2048); si va muy lento baja dos de golpe.
+  En pantallas Retina usa MSAA 2×. Los niveles están en `QUALITY`.
 - **`?debug`** en la URL muestra fps, ms por frame, tiempo de GPU, nivel, resolución, draw calls y
   triángulos, y permite forzar un nivel. `?quality=N` fija el nivel sin ajuste automático.
 - La cámara no baja de `CAMERA.minHeight` ni se mete en el terreno.

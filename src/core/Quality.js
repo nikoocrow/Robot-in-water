@@ -31,8 +31,8 @@ export default class Quality {
       level: this.level,
       auto: this.auto,
       pixelRatio,
-      // En alta densidad los bordes ya son finos: 2 muestras bastan
-      samples: pixelRatio >= 1.75 ? 2 : 4,
+      // En alta densidad (Retina) los bordes ya son finos: 2 muestras bastan
+      samples: pixelRatio >= 1.5 ? 2 : 4,
       shadowMapSize: level.shadowMapSize
     }
   }
@@ -70,8 +70,11 @@ export default class Quality {
     this.resetWindow()
 
     if (frameMs > QUALITY.slowFrameMs && this.level < QUALITY.levels.length - 1) {
-      this.best = Math.max(this.best, this.level + 1)
-      this.setLevel(this.level + 1)
+      // Muy lento: baja dos niveles de golpe para llegar antes a uno fluido
+      const step = frameMs > QUALITY.slowFrameMs * 2 ? 2 : 1
+      const level = Math.min(this.level + step, QUALITY.levels.length - 1)
+      this.best = Math.max(this.best, level)
+      this.setLevel(level)
       this.calmTime = 0
     } else if (frameMs < QUALITY.fastFrameMs && this.level > this.best) {
       // Subir solo tras un rato holgado, para no oscilar

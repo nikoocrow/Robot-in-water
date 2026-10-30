@@ -2,7 +2,6 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
 import { POST } from '../config/scene.js'
 
@@ -23,53 +22,70 @@ const VERTEX = /* glsl */ `
   }
 `
 
-// Gaussiana separable de 13 taps; el radio crece lejos de la franja nítida
+// Gaussiana de 13 taps; el radio crece lejos de la franja nítida
+const TILT_SHIFT = /* glsl */ `
+  uniform float uFocus;
+  uniform float uRange;
+  uniform float uFeather;
+  uniform float uBlur;
+
+  float tiltAmount(vec2 uv) {
+    return smoothstep(uRange, uRange + uFeather, abs(uv.y - uFocus)) * uBlur;
+  }
+
+  vec3 tiltBlur(sampler2D map, vec2 uv, vec2 stepUv) {
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    for (int i = -6; i <= 6; i++) {
+      float w = exp(-float(i * i) / 18.0);
+      sum += texture2D(map, uv + stepUv * float(i)).rgb * w;
+      total += w;
+    }
+    return sum / total;
+  }
+`
+
+const tiltUniforms = () => ({
+  uFocus: { value: POST.tiltShift.focus },
+  uRange: { value: POST.tiltShift.range },
+  uFeather: { value: POST.tiltShift.feather },
+  uBlur: { value: POST.tiltShift.blur }
+})
+
+// Primera pasada del tilt-shift (horizontal), todavía en HDR lineal
 const TiltShiftShader = {
   uniforms: {
     tDiffuse: { value: null },
-    uDirection: { value: new THREE.Vector2(1, 0) },
     uResolution: { value: new THREE.Vector2(1, 1) },
-    uFocus: { value: POST.tiltShift.focus },
-    uRange: { value: POST.tiltShift.range },
-    uFeather: { value: POST.tiltShift.feather },
-    uBlur: { value: POST.tiltShift.blur }
+    ...tiltUniforms()
   },
   vertexShader: VERTEX,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform vec2 uDirection;
     uniform vec2 uResolution;
-    uniform float uFocus;
-    uniform float uRange;
-    uniform float uFeather;
-    uniform float uBlur;
     varying vec2 vUv;
+    ${TILT_SHIFT}
 
     void main() {
-      float amount = smoothstep(uRange, uRange + uFeather, abs(vUv.y - uFocus)) * uBlur;
-      if (amount < 0.01) {
-        gl_FragColor = texture2D(tDiffuse, vUv);
-        return;
-      }
-      vec2 stepUv = uDirection * amount / uResolution;
-      vec4 sum = vec4(0.0);
-      float total = 0.0;
-      for (int i = -6; i <= 6; i++) {
-        float w = exp(-float(i * i) / 18.0);
-        sum += texture2D(tDiffuse, vUv + stepUv * float(i)) * w;
-        total += w;
-      }
-      gl_FragColor = sum / total;
+      float amount = tiltAmount(vUv);
+      gl_FragColor = amount < 0.01
+        ? texture2D(tDiffuse, vUv)
+        : vec4(tiltBlur(tDiffuse, vUv, vec2(amount / uResolution.x, 0.0)), 1.0);
     }
   `
 }
 
-// Aberración, color, viñeta y grano. Ya en espacio de display (después del OutputPass)
+// Un solo pase a pantalla: segunda pasada del tilt-shift (vertical), aberración,
+// tone mapping + sRGB (lo que hacía el OutputPass) y después, ya en espacio de display,
+// color, viñeta y grano. Juntarlos ahorra tres lecturas y escrituras de pantalla completa
 const FinalShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
     uResolution: { value: new THREE.Vector2(1, 1) },
+    uTilt: { value: 0 },
+    uGrade: { value: 0 },
+    ...tiltUniforms(),
     uAberration: { value: 0 },
     uTint: { value: new THREE.Color() },
     uBrightness: { value: 0 },
@@ -85,6 +101,8 @@ const FinalShader = {
     uniform sampler2D tDiffuse;
     uniform float uTime;
     uniform vec2 uResolution;
+    uniform float uTilt;
+    uniform float uGrade;
     uniform float uAberration;
     uniform vec3 uTint;
     uniform float uBrightness;
@@ -95,6 +113,7 @@ const FinalShader = {
     uniform vec3 uVignetteColor;
     uniform float uGrain;
     varying vec2 vUv;
+    ${TILT_SHIFT}
 
     float hash(vec2 p) {
       return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
@@ -102,32 +121,46 @@ const FinalShader = {
 
     void main() {
       vec2 centered = vUv - 0.5;
-      vec2 offset = centered * uAberration * length(centered) * 4.0;
-      vec3 color = vec3(
-        texture2D(tDiffuse, vUv + offset).r,
-        texture2D(tDiffuse, vUv).g,
-        texture2D(tDiffuse, vUv - offset).b
-      );
+      vec3 center = texture2D(tDiffuse, vUv).rgb;
+      vec3 color = center;
 
-      color *= uTint;
-      color += uBrightness;
-      color = (color - 0.5) * uContrast + 0.5;
-      float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-      color = mix(vec3(luma), color, uSaturation);
+      float amount = tiltAmount(vUv) * uTilt;
+      if (amount >= 0.01) color = tiltBlur(tDiffuse, vUv, vec2(0.0, amount / uResolution.y));
 
-      float edge = length(centered) * 1.41421;
-      float vignette = smoothstep(1.0 - uVignetteSoftness, 1.0, edge) * uVignette;
-      color = mix(color, uVignetteColor, vignette);
+      if (uGrade > 0.5) {
+        // Aberración cromática radial: R hacia fuera, B hacia dentro
+        vec2 offset = centered * uAberration * length(centered) * 4.0;
+        color.r += texture2D(tDiffuse, vUv + offset).r - center.r;
+        color.b += texture2D(tDiffuse, vUv - offset).b - center.b;
+      }
 
-      color += (hash(vUv * uResolution + fract(uTime) * 100.0) - 0.5) * uGrain;
+      // Al pintar en pantalla three define toneMapping() y linearToOutputTexel()
+      #ifdef TONE_MAPPING
+        color = toneMapping(color);
+      #endif
+      color = linearToOutputTexel(vec4(max(color, 0.0), 1.0)).rgb;
+
+      if (uGrade > 0.5) {
+        color *= uTint;
+        color += uBrightness;
+        color = (color - 0.5) * uContrast + 0.5;
+        float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        color = mix(vec3(luma), color, uSaturation);
+
+        float edge = length(centered) * 1.41421;
+        float vignette = smoothstep(1.0 - uVignetteSoftness, 1.0, edge) * uVignette;
+        color = mix(color, uVignetteColor, vignette);
+
+        color += (hash(vUv * uResolution + fract(uTime) * 100.0) - 0.5) * uGrain;
+      }
       gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
     }
   `
 }
 
 /**
- * Render en HDR (half float + MSAA) -> bloom -> tone mapping y sRGB (OutputPass)
- * -> tilt-shift en dos pasadas -> aberración, color, viñeta y grano.
+ * Render en HDR (half float + MSAA) -> bloom -> tilt-shift horizontal
+ * -> [tilt-shift vertical, tone mapping, sRGB, aberración, color, viñeta y grano] a pantalla.
  */
 export default class PostProcessing {
   constructor(renderer, scene, camera, debug) {
@@ -136,32 +169,29 @@ export default class PostProcessing {
     this.camera = camera
     this.enabled = true
     // Lo que cambia entre escenarios se aplica con setScenario
-    this.params = { toneMapping: 'None', tiltShift: true }
+    this.params = { toneMapping: 'None', tiltShift: POST.tiltShift.enabled, grade: true }
 
-    const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
-    this.composer = new EffectComposer(renderer, target)
+    // Solo la escena necesita MSAA; la otra textura es para el tilt-shift horizontal
+    this.sceneTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 })
+    this.composer = new EffectComposer(renderer, this.sceneTarget)
+    this.passTarget = this.composer.renderTarget2
+    this.passTarget.samples = 0
     this.composer.addPass(new RenderPass(scene, camera))
 
-    const { tiltShift, color } = POST
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0, 0, 0)
+    // El resplandor es muy difuso: a media resolución no se nota y cuesta 4 veces menos
+    const setBloomSize = this.bloom.setSize.bind(this.bloom)
+    this.bloom.setSize = (width, height) => setBloomSize(Math.round(width * POST.bloomScale), Math.round(height * POST.bloomScale))
     this.composer.addPass(this.bloom)
-    this.composer.addPass(new OutputPass())
 
-    // Los dos pases comparten los parámetros (mismos objetos uniform)
     this.tiltX = new ShaderPass(TiltShiftShader)
-    this.tiltY = new ShaderPass(TiltShiftShader)
-    this.tiltY.uniforms = {
-      ...this.tiltX.uniforms,
-      tDiffuse: { value: null },
-      uDirection: { value: new THREE.Vector2(0, 1) }
-    }
-    this.tiltY.material.uniforms = this.tiltY.uniforms
-    this.params.tiltShift = tiltShift.enabled
     this.composer.addPass(this.tiltX)
-    this.composer.addPass(this.tiltY)
 
     this.final = new ShaderPass(FinalShader)
     const u = this.final.uniforms
+    // Los parámetros del tilt-shift son los mismos objetos en los dos pases
+    for (const key of ['uFocus', 'uRange', 'uFeather', 'uBlur']) u[key] = this.tiltX.uniforms[key]
+    const { color } = POST
     u.uAberration.value = color.aberration
     u.uSaturation.value = color.saturation
     u.uContrast.value = color.contrast
@@ -186,13 +216,20 @@ export default class PostProcessing {
     this.bloom.radius = bloom.radius
     this.bloom.threshold = bloom.threshold
     this.effects = effects
-    this.final.enabled = effects
     this.setTiltShift(this.params.tiltShift)
+    this.setGrade(this.params.grade)
   }
 
   setTiltShift(enabled) {
     this.params.tiltShift = enabled
-    this.tiltX.enabled = this.tiltY.enabled = enabled && this.effects
+    const on = enabled && this.effects
+    this.tiltX.enabled = on
+    this.final.uniforms.uTilt.value = on ? 1 : 0
+  }
+
+  setGrade(enabled) {
+    this.params.grade = enabled
+    this.final.uniforms.uGrade.value = enabled && this.effects ? 1 : 0
   }
 
   /** Ya estamos en espacio de display: el hex se carga tal cual, sin pasar a lineal */
@@ -202,11 +239,9 @@ export default class PostProcessing {
 
   /** Muestras MSAA del render target de la escena */
   setSamples(samples) {
-    for (const target of [this.composer.renderTarget1, this.composer.renderTarget2]) {
-      if (target.samples === samples) continue
-      target.samples = samples
-      target.dispose() // three lo recrea con las nuevas muestras en el siguiente uso
-    }
+    if (this.sceneTarget.samples === samples) return
+    this.sceneTarget.samples = samples
+    this.sceneTarget.dispose() // three lo recrea con las nuevas muestras en el siguiente uso
   }
 
   /** Llamar después de renderer.setSize: el composer trabaja al tamaño del drawing buffer */
@@ -224,6 +259,10 @@ export default class PostProcessing {
       return
     }
     this.final.uniforms.uTime.value = time
+    // El composer alterna sus dos texturas entre frames; se fija cuál es la de la escena
+    // para que la única con MSAA sea esa
+    this.composer.readBuffer = this.sceneTarget
+    this.composer.writeBuffer = this.passTarget
     this.composer.render()
   }
 
@@ -243,7 +282,7 @@ export default class PostProcessing {
 
     const tilt = folder.addFolder('Tilt-shift').close()
     const tu = this.tiltX.uniforms
-    // En el mar no hay tilt-shift aunque esté activado
+    // En el mar no hay tilt-shift ni pase de color aunque estén activados
     tilt.add(this.params, 'tiltShift').name('activado').onChange((on) => this.setTiltShift(on))
     tilt.add(tu.uFocus, 'value', 0, 1, 0.01).name('foco')
     tilt.add(tu.uRange, 'value', 0, 0.5, 0.01).name('zona nítida')
@@ -252,7 +291,7 @@ export default class PostProcessing {
 
     const color = folder.addFolder('Color').close()
     const u = this.final.uniforms
-    color.add(this.final, 'enabled').name('activado')
+    color.add(this.params, 'grade').name('activado').onChange((on) => this.setGrade(on))
     color.add(u.uAberration, 'value', 0, 0.01, 0.0001).name('aberración')
     color.add(u.uSaturation, 'value', 0, 2, 0.01).name('saturación')
     color.add(u.uContrast, 'value', 0.5, 1.5, 0.01).name('contraste')

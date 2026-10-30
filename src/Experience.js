@@ -53,7 +53,7 @@ export default class Experience {
     try {
       const assets = await loadAssets((ratio) => this.hud.setProgress(ratio))
       this.world = new World(this.scene, assets, this.debug)
-      this.world.setupInteraction(this.canvas, this.camera.instance)
+      this.world.setupInteraction(this.canvas)
       this.applyQuality(this.quality.settings)
 
       if (this.world.blenderCamera) {

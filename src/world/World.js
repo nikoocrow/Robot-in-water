@@ -54,37 +54,47 @@ export default class World {
   /** Río (con terreno, pasto, árboles y confeti) o mar alrededor de la isla: SCENARIOS[x] */
   setScenario(scenario) {
     this.nature = scenario.nature
-    for (const object of [this.terrain.mesh, this.grass.mesh, this.trees.group, this.confetti.points]) {
+    for (const object of [this.terrain.mesh, this.grass.group, this.trees.group, this.confetti.points]) {
       object.visible = scenario.nature
     }
     this.sky.setScenario(scenario)
     this.lights.setShadowArea(scenario.shadow)
   }
 
-  /** El pasto se aparta del punto del terreno bajo el puntero */
-  setupInteraction(canvas, camera) {
-    const raycaster = new THREE.Raycaster()
-    const pointer = new THREE.Vector2()
+  /**
+   * El pasto se aparta del punto del terreno bajo el puntero. El rayo se lanza como
+   * mucho una vez por frame (en update): un trackpad manda varios eventos por frame
+   */
+  setupInteraction(canvas) {
+    this.raycaster = new THREE.Raycaster()
+    this.pointer = new THREE.Vector2()
+    this.pointerMoved = false
     canvas.addEventListener('pointermove', (event) => {
       const rect = canvas.getBoundingClientRect()
-      pointer.set(
+      this.pointer.set(
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
         -((event.clientY - rect.top) / rect.height) * 2 + 1
       )
-      if (!this.nature) return
-      raycaster.setFromCamera(pointer, camera)
-      this.grass.setInteraction(this.terrain.raycast(raycaster.ray))
+      this.pointerMoved = true
     })
-    canvas.addEventListener('pointerleave', () => this.grass.setInteraction(null))
+    canvas.addEventListener('pointerleave', () => {
+      this.pointerMoved = false
+      this.grass.setInteraction(null)
+    })
   }
 
   update(delta, elapsed, camera) {
+    if (this.pointerMoved && this.nature) {
+      this.pointerMoved = false
+      this.raycaster.setFromCamera(this.pointer, camera)
+      this.grass.setInteraction(this.terrain.raycast(this.raycaster.ray))
+    }
     this.materials.update(elapsed + this.timeOffset)
     this.sky.update(camera, elapsed)
     this.clouds.update(elapsed)
     this.droplets.update(delta)
     this.robot.update(delta)
-    this.grass.update(elapsed)
+    this.grass.update(elapsed, camera)
     this.trees.update(elapsed)
     this.confetti.update(elapsed)
   }

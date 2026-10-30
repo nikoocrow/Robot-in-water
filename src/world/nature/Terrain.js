@@ -52,7 +52,9 @@ export default class Terrain {
       uDirtLightColor: { value: new THREE.Color(TERRAIN.dirtLightColor) }
     }
 
-    this.mesh = new THREE.Mesh(this.buildGeometry(), this.buildMaterial())
+    // Dos materiales: el suelo seco, opaco puro, y la franja de la orilla, que recorta
+    // lo que queda bajo el agua (discard impide a la GPU descartar lo oculto antes de pintarlo)
+    this.mesh = new THREE.Mesh(this.buildGeometry(), [this.buildMaterial(false), this.buildMaterial(true)])
     this.mesh.receiveShadow = true
     scene.add(this.mesh)
 
@@ -190,16 +192,39 @@ export default class Terrain {
     geometry.rotateX(-Math.PI / 2)
 
     const position = geometry.attributes.position
+    // Altura de cada vértice respecto al agua
+    const aboveWater = new Float32Array(position.count)
     for (let i = 0; i < position.count; i++) {
-      position.setY(i, this.getHeight(position.getX(i), position.getZ(i)))
+      const z = position.getZ(i)
+      const y = this.getHeight(position.getX(i), z)
+      position.setY(i, y)
+      aboveWater[i] = y - this.waterLevel(z)
     }
     geometry.computeVertexNormals()
+
+    // Los triángulos enteros bajo el agua no se ven: fuera. Los que cruzan el nivel van
+    // al grupo con recorte; el resto, al opaco
+    const index = geometry.index.array
+    const dry = []
+    const bank = []
+    for (let i = 0; i < index.length; i += 3) {
+      const a = aboveWater[index[i]]
+      const b = aboveWater[index[i + 1]]
+      const c = aboveWater[index[i + 2]]
+      if (Math.max(a, b, c) <= 0) continue
+      ;(Math.min(a, b, c) < 0 ? bank : dry).push(index[i], index[i + 1], index[i + 2])
+    }
+    geometry.setIndex([...dry, ...bank])
+    geometry.addGroup(0, dry.length, 0)
+    geometry.addGroup(dry.length, bank.length, 1)
     geometry.computeBoundingSphere()
     return geometry
   }
 
-  buildMaterial() {
+  /** clip: descarta lo que queda bajo el agua (solo en la franja de la orilla) */
+  buildMaterial(clip) {
     const material = new THREE.MeshLambertMaterial()
+    if (clip) material.defines = { WATER_CLIP: '' }
     material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms)
 
@@ -226,7 +251,9 @@ export default class Terrain {
         /* glsl */ `
         // Bajo el agua no se dibuja: ahí se ve el río del shader del cielo
         float waterLevel = mix(uRiverLevel.x, uRiverLevel.y, smoothstep(uRiverStep.x, uRiverStep.y, vGroundPos.z));
-        if (vGroundPos.y < waterLevel) discard;
+        #ifdef WATER_CLIP
+          if (vGroundPos.y < waterLevel) discard;
+        #endif
 
         float mask = texture2D(uPathMask, vGroundPos.xz / uSize + 0.5).r;
         float broad = snoise(vGroundPos.xz * 0.35) * 0.5 + 0.5;
@@ -244,7 +271,7 @@ export default class Terrain {
         `
       )
     }
-    material.customProgramCacheKey = () => 'terrain'
+    material.customProgramCacheKey = () => (clip ? 'terrain-clip' : 'terrain')
     return material
   }
 

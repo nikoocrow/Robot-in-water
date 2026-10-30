@@ -141,6 +141,7 @@ export const CLOUDS = {
 // Postproceso (core/PostProcessing.js)
 // Tone mapping, exposición, bloom y si hay tilt-shift y pase de color: en SCENARIOS
 export const POST = {
+  bloomScale: 0.5,              // resolución del bloom respecto a la pantalla
   // Tilt-shift separable: blur en píxeles por tap fuera de la franja nítida
   // Foco un poco por encima del centro: el robot queda nítido en la toma inicial
   tiltShift: { enabled: true, focus: 0.56, range: 0.2, feather: 0.35, blur: 2.2 },
@@ -254,6 +255,10 @@ export const GRASS = {
   seed: 3,
   count: 220000,
   segments: 4,
+  chunk: 8,                     // lado de cada trozo (se descartan los que quedan fuera de cámara)
+  // Densidad según la distancia a la cámara: completa hasta `near`, `min` desde `far`
+  // (lejos ya hay niebla y tilt-shift)
+  lod: { near: 20, far: 48, min: 0.45 },
   height: 0.85,
   width: 0.14,
   normalBlend: 0.25,
